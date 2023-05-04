@@ -5,16 +5,28 @@ from Pyro5.server import expose, callback
 
 from threading import Thread
 
-@expose
+from cryptography.hazmat.primitives.asymmetric import rsa, padding
+from cryptography.hazmat.primitives import serialization, hashes
+import base64
+
 @callback
 class ClienteCallback:
     def __init__(self, usuario):
         self.usuario = usuario
+        self.private_key = rsa.generate_private_key(
+            public_exponent=65537,
+            key_size=2048,
+        )
+        self.public_key = self.private_key.public_key()
+        self.uri = None
+
+    @expose
+    def notificacao(self, mensagem):
+        print(mensagem)
 
     def set_uri(self, uri):
         self.uri = uri
-    def notificacao(self, mensagem):
-        print(mensagem)
+
     def loopThread(self, daemon):
         daemon.requestLoop()
 
@@ -56,6 +68,12 @@ def menu():
         uri_cliente_callback = daemon.register(cliente_callback)
         cliente_callback.set_uri(uri_cliente_callback)
 
+        pem_public_key = cliente_callback.public_key.public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo)
+
+        leilao.cadastrar_usuario(cliente_callback.usuario, cliente_callback.uri, pem_public_key)
+
         thread = Thread(target=cliente_callback.loopThread, args=(daemon,))
         thread.daemon = True
         thread.start()
@@ -78,7 +96,7 @@ def menu():
         preco_inicial = float(input("Preço inicial: "))
         duracao = int(input("Duração (segundos): "))
 
-        leilao.add_produto(codigo, nome, descricao, preco_inicial, duracao, cliente_callback.uri)
+        leilao.add_produto(codigo, nome, descricao, preco_inicial, duracao, cliente_callback.usuario)
         print("Produto cadastrado com sucesso")
     
     elif op == 4 and not cliente_callback:
@@ -88,12 +106,18 @@ def menu():
         codigo = int(input("Código: "))
         valor = float(input("Valor: "))
         
-        lance_mensagem = leilao.dar_lance(codigo, valor, comprador=cliente_callback.usuario, uri=cliente_callback.uri)
+        signature = cliente_callback.private_key.sign(
+            "teste".encode("utf-8"),
+            padding.PSS(
+                mgf=padding.MGF1(hashes.SHA256()),
+                salt_length=padding.PSS.MAX_LENGTH
+            ),
+            hashes.SHA256()
+        )
+
+        lance_mensagem = leilao.dar_lance(cliente_callback.usuario, codigo, valor, signature)
 
         print(lance_mensagem)
-
-    elif op == 5:
-        print(leilao.test())
     
 
 if __name__ == '__main__':
