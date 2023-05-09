@@ -1,6 +1,6 @@
 from Pyro5.server import Daemon
 from Pyro5.core import locate_ns
-from Pyro5.api import Proxy
+from Pyro5.api import Proxy, config
 from Pyro5.server import expose, callback
 
 from threading import Thread
@@ -61,9 +61,9 @@ def menu():
         global cliente_callback
         print("*** CADASTRO DE USUÁRIO ***")
         usuario = input("Usuário: ")
-        print("Usuário cadastrado com sucesso")
 
         daemon = Daemon()
+        config.SERIALIZER = "marshal"
         cliente_callback = ClienteCallback(usuario)
         uri_cliente_callback = daemon.register(cliente_callback)
         cliente_callback.set_uri(uri_cliente_callback)
@@ -72,11 +72,12 @@ def menu():
             encoding=serialization.Encoding.PEM,
             format=serialization.PublicFormat.SubjectPublicKeyInfo)
 
-        leilao.cadastrar_usuario(cliente_callback.usuario, cliente_callback.uri, pem_public_key)
+        leilao.cadastrar_usuario(usuario, uri_cliente_callback, pem_public_key)
 
         thread = Thread(target=cliente_callback.loopThread, args=(daemon,))
         thread.daemon = True
         thread.start()
+        print("Usuário cadastrado com sucesso")
 
     elif op == 2:
         print("*** LEILÕES ATIVOS ***")
@@ -107,7 +108,7 @@ def menu():
         valor = float(input("Valor: "))
         
         signature = cliente_callback.private_key.sign(
-            "teste".encode("utf-8"),
+            str(str(codigo) + str(valor)).encode("utf-8"),
             padding.PSS(
                 mgf=padding.MGF1(hashes.SHA256()),
                 salt_length=padding.PSS.MAX_LENGTH

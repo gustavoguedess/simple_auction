@@ -1,6 +1,6 @@
 from Pyro5.server import expose, Daemon, oneway
 from Pyro5.core import locate_ns
-from Pyro5.api import Proxy
+from Pyro5.api import Proxy, config
 
 from cryptography.hazmat.primitives import serialization, hashes
 from cryptography.hazmat.primitives.asymmetric import padding
@@ -30,11 +30,21 @@ class Produto:
                 self.clientes_interessados.append(cliente)
 
             for cliente in self.clientes_interessados:
+                cliente.proxy._pyroClaimOwnership()
                 cliente.proxy.notificacao(f"Novo lance no produto {self.nome} de R$ {self.lance}")
 
             return True
         return False
-
+    
+    def finalizar_produto(self):
+        for cliente in self.clientes_interessados:
+            cliente.proxy._pyroClaimOwnership()
+            if self.comprador != "":
+                cliente.proxy.notificacao(f"Produto {self.nome} expirou. O comprador foi {self.comprador} com o valor de R$ {self.lance}")
+            else:
+                cliente.proxy.notificacao(f"Produto {self.nome} expirou. Nenhum comprador")
+        print(f"Produto {self.nome} expirou. O comprador foi {self.comprador} com o valor de R$ {self.lance}")
+        
     def disponivel(self):
         return self.tempo_final > datetime.now()
 
@@ -79,30 +89,40 @@ class Leilao:
         if usuario not in self.clientes:
             return "Usuário não cadastrado"
         
-        if not self.clientes[usuario].chave_publica.verify(
-                base64.b64decode(signature['data']),
-                "teste".encode('utf-8'),
+        try:
+            self.clientes[usuario].chave_publica.verify(
+                signature,
+                str(str(codigo) + str(valor)).encode("utf-8"),
                 padding.PSS(
                     mgf=padding.MGF1(hashes.SHA256()),
                     salt_length=padding.PSS.MAX_LENGTH
                 ),
                 hashes.SHA256()
-            ):
+            )
+        except:
             return "Assinatura inválida"
-
+        
         for produto in self.produtos:
             if produto.codigo == codigo:
                 if produto.set_lance(valor, self.clientes[usuario]):
                     return "Lance efetuado com sucesso! :)"
                 return "Lance não aceito. Valor menor que o atual"
         return "Produto não encontrado"
-    
+
     @expose
+    # def cadastrar_usuario(self, usuario='gg', uri='test', pem_public_key=None):
     def cadastrar_usuario(self, usuario, uri, pem_public_key):
         chave_publica = serialization.load_pem_public_key(
-            base64.b64decode(pem_public_key['data']),
+            pem_public_key
         )
+    
         self.clientes[usuario] = Cliente(usuario, uri, chave_publica)
+
+    def get_clientes_interessados(self, codigo):
+        for produto in self.produtos:
+            if produto.codigo == codigo:
+                return produto.clientes_interessados
+        return []
 
     def disponivel(self, codigo):
         for produto in self.produtos:
@@ -123,19 +143,17 @@ def main():
     print("Servidor de leilão iniciado")
 
     while True:
-        lista_produtos = leilao.get_produtos()
-        for produto in lista_produtos:
-            if not leilao.disponivel(produto['codigo']):
-                for cliente in produto['clientes_interessados']:
-                    cliente.proxy.notificacao(f"Produto {produto['nome']} expirou. O comprador foi {produto['comprador']} com o valor de R$ {produto['lance']}")
-                print(f"Produto {produto['codigo']} expirou")
-                leilao.remove_produto(produto['codigo'])
+        for produto in leilao.produtos:
+            if not leilao.disponivel(produto.codigo):
+                produto.finalizar_produto()
+                leilao.remove_produto(produto.codigo)
         time.sleep(5)
 
 if __name__ == '__main__':
     servidor_nomes = locate_ns()
 
     daemon = Daemon()
+    config.SERIALIZER = "marshal"
 
     uri = daemon.register(leilao)
     servidor_nomes.register("leilao", uri)
